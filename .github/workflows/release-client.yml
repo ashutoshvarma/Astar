@@ -1,15 +1,10 @@
 name: CI – openssl-sys aarch64 cross-build
 
-on:
-  push:
-    branches: [ '**' ]
-  pull_request:
-  workflow_dispatch:
+on: [push, pull_request, workflow_dispatch]
 
 jobs:
   build-openssl-sys-aarch64:
-    # GitHub-hosted runner (Ubuntu 24.04 as of May 2025)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest     # Noble (24.04)
 
     env:
       RUST_BACKTRACE: 1
@@ -20,50 +15,42 @@ jobs:
       OPENSSL_INCLUDE_DIR: /usr/include/aarch64-linux-gnu
 
     steps:
-    # ──────────────────────────────────────────────────────────────────────
-    # 1.  Enable arm64 architecture and point it at ports.ubuntu.com
-    # ──────────────────────────────────────────────────────────────────────
-      - name: Add arm64 arch & redirect its mirrors to ports.ubuntu.com
+    # ── 1 ── Replace sources.list with clean amd64 + arm64 entries ─────────
+      - name: Re-write APT sources for amd64 & arm64
         run: |
-          sudo dpkg --add-architecture arm64
+          CODENAME=$(lsb_release -sc)                # noble
+          sudo rm -f /etc/apt/sources.list.d/*.list  # drop extra mirrors
+          sudo tee /etc/apt/sources.list > /dev/null <<EOF
+          # --- default architecture (amd64) ----------
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu $CODENAME          main restricted universe multiverse
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu $CODENAME-updates  main restricted universe multiverse
+          deb [arch=amd64] http://security.ubuntu.com/ubuntu $CODENAME-security main restricted universe multiverse
 
-          # Restrict existing lines to amd64 so they don't 404 for arm64
-          sudo sed -Ei 's|^deb (http.*ubuntu) |deb [arch=amd64] \1 |' /etc/apt/sources.list
-
-          CODENAME=$(lsb_release -sc)     # 'noble' on ubuntu-latest now
-
-          # Add explicit arm64 mirror entries on ports.ubuntu.com
-          cat <<EOF | sudo tee /etc/apt/sources.list.d/ubuntu-ports-arm64.list
+          # --- foreign architecture (arm64) via ports ---
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports $CODENAME          main restricted universe multiverse
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports $CODENAME-updates  main restricted universe multiverse
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports $CODENAME-security main restricted universe multiverse
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports $CODENAME-backports main restricted universe multiverse
           EOF
 
-          sudo apt update
+          sudo dpkg --add-architecture arm64
+          sudo apt-get update
 
-    # ──────────────────────────────────────────────────────────────────────
-    # 2.  Install cross compiler, sysroot & OpenSSL dev files (arm64)
-    # ──────────────────────────────────────────────────────────────────────
-      - name: Install tool-chain and OpenSSL for arm64
+    # ── 2 ── Install cross tool-chain & OpenSSL dev files (arm64) ──────────
+      - name: Install cross compiler and OpenSSL:arm64
         run: |
-          sudo apt install -y \
+          sudo apt-get install -y \
             gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
             libc6-dev:arm64 zlib1g-dev:arm64 libssl-dev:arm64 \
             pkg-config
 
-    # ──────────────────────────────────────────────────────────────────────
-    # 3.  Provide an arm64-aware pkg-config wrapper
-    # ──────────────────────────────────────────────────────────────────────
-      - name: Add aarch64-linux-gnu-pkg-config wrapper
+    # ── 3 ── Provide aarch64-aware pkg-config wrapper ──────────────────────
+      - name: Add aarch64 pkg-config wrapper
         run: |
           echo -e '#!/usr/bin/env bash\nPKG_CONFIG_SYSROOT_DIR=/usr/aarch64-linux-gnu exec pkg-config "$@"' \
             | sudo tee /usr/local/bin/aarch64-linux-gnu-pkg-config
           sudo chmod +x /usr/local/bin/aarch64-linux-gnu-pkg-config
 
-    # ──────────────────────────────────────────────────────────────────────
-    # 4.  Configure Cargo for the cross target
-    # ──────────────────────────────────────────────────────────────────────
+    # ── 4 ── Configure Cargo for cross compilation ─────────────────────────
       - name: Configure Cargo target
         run: |
           mkdir -p .cargo
@@ -76,10 +63,8 @@ jobs:
       - name: Add Rust aarch64 target
         run: rustup target add aarch64-unknown-linux-gnu
 
-    # ──────────────────────────────────────────────────────────────────────
-    # 5.  Minimal demo crate that depends only on openssl-sys
-    # ──────────────────────────────────────────────────────────────────────
-      - name: Create minimal project
+    # ── 5 ── Minimal crate that depends only on openssl-sys ────────────────
+      - name: Create demo project
         run: |
           mkdir demo && cd demo
           cat > Cargo.toml <<'TOML'
@@ -91,12 +76,9 @@ jobs:
           [dependencies]
           openssl-sys = "0.9.108"
           TOML
-
           mkdir src && echo "fn main() {}" > src/main.rs
 
-    # ──────────────────────────────────────────────────────────────────────
-    # 6.  Build just the openssl-sys crate for aarch64
-    # ──────────────────────────────────────────────────────────────────────
+    # ── 6 ── Build openssl-sys for aarch64 ─────────────────────────────────
       - name: Build openssl-sys for aarch64
         working-directory: demo
         run: cargo build --target aarch64-unknown-linux-gnu -p openssl-sys --verbose
