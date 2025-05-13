@@ -1,10 +1,10 @@
-name: Fix openssl-sys aarch64 build
+name: Fix openssl‑sys on aarch64 (jammy runner)
 
 on: [push, pull_request, workflow_dispatch]
 
 jobs:
   openssl-sys-aarch64:
-    runs-on: ubuntu-latest          # Noble runner
+    runs-on: ubuntu-22.04          # ←── pin to jammy
 
     env:
       PKG_CONFIG_ALLOW_CROSS: "1"
@@ -15,36 +15,25 @@ jobs:
       CARGO_TERM_VERBOSE: true
 
     steps:
-    # 1 ─────────── Enable arm64 repos on ports.ubuntu.com ──────────
-      - name: Enable arm64 architecture + mirror
+      # 1. Enable arm64 and install the cross sysroot
+      - name: Install aarch64 toolchain + OpenSSL dev
         run: |
           sudo dpkg --add-architecture arm64
-          CODENAME=$(lsb_release -sc)   # noble
-          sudo tee /etc/apt/sources.list.d/ubuntu-ports-arm64.list <<EOF
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports $CODENAME          main restricted universe multiverse
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports $CODENAME-updates  main restricted universe multiverse
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports $CODENAME-security main restricted universe multiverse
-          EOF
-          sudo apt-get update
-
-    # 2 ─────────── Install toolchain + arm64 OpenSSL ───────────────
-      - name: Install cross compiler & libssl-dev:arm64
-        run: |
-          sudo apt-get install -y \
+          sudo apt update
+          sudo apt install -y \
             gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
             libc6-dev:arm64 zlib1g-dev:arm64 libssl-dev:arm64 \
             pkg-config
 
-    # 3 ─────────── Provide pkg-config wrapper ──────────────────────
-      - name: Add aarch64 pkg-config wrapper
+      # 2. Provide an arm64‑aware pkg‑config wrapper
+      - name: pkg-config wrapper
         run: |
-          echo '#!/usr/bin/env bash
-          PKG_CONFIG_SYSROOT_DIR=/usr/aarch64-linux-gnu exec pkg-config "$@"' \
-          | sudo tee /usr/local/bin/aarch64-linux-gnu-pkg-config
+          echo -e '#!/usr/bin/env bash\nPKG_CONFIG_SYSROOT_DIR=/usr/aarch64-linux-gnu exec pkg-config "$@"' \
+            | sudo tee /usr/local/bin/aarch64-linux-gnu-pkg-config
           sudo chmod +x /usr/local/bin/aarch64-linux-gnu-pkg-config
 
-    # 4 ─────────── Cargo cross config ──────────────────────────────
-      - name: Configure Cargo target
+      # 3. Tell Cargo how to cross‑link
+      - name: Cargo target config
         run: |
           mkdir -p .cargo
           cat > .cargo/config <<'EOF'
@@ -54,8 +43,8 @@ jobs:
           EOF
           rustup target add aarch64-unknown-linux-gnu
 
-    # 5 ─────────── Minimal crate building only openssl-sys ─────────
-      - name: Create demo crate
+      # 4. Tiny demo crate that depends only on openssl‑sys
+      - name: Create minimal project
         run: |
           mkdir demo && cd demo
           cat > Cargo.toml <<'TOML'
@@ -68,6 +57,6 @@ jobs:
           TOML
           mkdir src && echo "fn main() {}" > src/main.rs
 
-      - name: Build openssl-sys for aarch64
+      - name: Build openssl‑sys for aarch64
         working-directory: demo
         run: cargo build --target aarch64-unknown-linux-gnu -p openssl-sys --verbose
