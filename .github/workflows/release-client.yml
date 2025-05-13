@@ -20,11 +20,11 @@ jobs:
         run: |
           sudo dpkg --add-architecture arm64
 
-          # tag every existing repo line as amd64-only
-          sudo sed -Ei 's|^deb(?!.*\[arch)|deb [arch=amd64]|' /etc/apt/sources.list
+          # add [arch=amd64] to every repo line that lacks an [arch=...] tag
+          sudo sed -i '/^deb /{/\[arch=/! s/^deb /deb [arch=amd64] /}' /etc/apt/sources.list
 
-          # add ports.ubuntu.com lines for arm64
-          CODENAME=$(lsb_release -sc)   # 'jammy'
+          # add ports.ubuntu.com for arm64
+          CODENAME=$(lsb_release -sc)
           sudo tee /etc/apt/sources.list.d/ports-arm64.list > /dev/null <<EOF
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports $CODENAME          main restricted universe multiverse
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports $CODENAME-updates  main restricted universe multiverse
@@ -32,6 +32,7 @@ jobs:
           EOF
 
           sudo apt-get update
+
 
     # ─── 2. Install cross tool-chain & OpenSSL sysroot ─────────────────────
       - name: Install aarch64 tool-chain & libssl-dev:arm64
