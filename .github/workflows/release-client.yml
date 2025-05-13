@@ -1,28 +1,20 @@
 name: CI – openssl-sys aarch64 cross-build
 
-on:
-  push:
-    branches: [ '**' ]
-  pull_request:
-  workflow_dispatch:
+on: [push, pull_request, workflow_dispatch]
 
 jobs:
   build-openssl-sys-aarch64:
-    runs-on: ubuntu-latest
-
+    runs-on: ubuntu-22.04          # ←─ pin to jammy instead of ubuntu-latest
     env:
       RUST_BACKTRACE: 1
-      CARGO_TERM_COLOR: always
       CARGO_TERM_VERBOSE: true
-      # paths for the arm64 OpenSSL installation
       OPENSSL_DIR:         /usr/lib/aarch64-linux-gnu
       OPENSSL_LIB_DIR:     /usr/lib/aarch64-linux-gnu
       OPENSSL_INCLUDE_DIR: /usr/include/aarch64-linux-gnu
       PKG_CONFIG_ALLOW_CROSS: "1"
 
     steps:
-    # ── 1. set up system tool-chain & arm64 sysroot ────────────────────────
-      - name: Install cross tool-chain and OpenSSL:arm64
+      - name: Install cross tool-chain & OpenSSL :arm64
         run: |
           sudo dpkg --add-architecture arm64
           sudo apt update
@@ -31,15 +23,13 @@ jobs:
             libc6-dev:arm64 zlib1g-dev:arm64 libssl-dev:arm64 \
             pkg-config
 
-    # ── 2. create pkg-config wrapper (cross-aware) ─────────────────────────
-      - name: Provide aarch64-linux-gnu-pkg-config wrapper
+      - name: Add aarch64 pkg-config wrapper
         run: |
           echo -e '#!/usr/bin/env bash\nPKG_CONFIG_SYSROOT_DIR=/usr/aarch64-linux-gnu exec pkg-config "$@"' \
             | sudo tee /usr/local/bin/aarch64-linux-gnu-pkg-config
           sudo chmod +x /usr/local/bin/aarch64-linux-gnu-pkg-config
 
-    # ── 3. configure Cargo for this target ─────────────────────────────────
-      - name: Configure Cargo target
+      - name: Set up Cargo for aarch64
         run: |
           mkdir -p .cargo
           cat > .cargo/config <<'EOF'
@@ -48,12 +38,10 @@ jobs:
           pkg-config = "aarch64-linux-gnu-pkg-config"
           EOF
 
-    # ── 4. add the Rust aarch64 target ─────────────────────────────────────
-      - name: Install Rust aarch64 target
+      - name: Add Rust aarch64 target
         run: rustup target add aarch64-unknown-linux-gnu
 
-    # ── 5. create a tiny one-file crate that depends only on openssl-sys ──
-      - name: Create minimal Cargo project
+      - name: Create minimal crate that depends only on openssl-sys
         run: |
           mkdir demo && cd demo
           cat > Cargo.toml <<'TOML'
@@ -65,11 +53,8 @@ jobs:
           [dependencies]
           openssl-sys = "0.9.108"
           TOML
+          mkdir src && echo "fn main() {}" > src/main.rs
 
-          mkdir -p src && echo "fn main() {}" > src/main.rs
-
-    # ── 6. build only the openssl-sys crate for aarch64 ────────────────────
-      - name: Build openssl-sys for aarch64 (cross)
+      - name: Build openssl-sys for aarch64
         working-directory: demo
-        run: |
-          cargo build --target aarch64-unknown-linux-gnu -p openssl-sys --verbose
+        run: cargo build --target aarch64-unknown-linux-gnu -p openssl-sys --verbose
