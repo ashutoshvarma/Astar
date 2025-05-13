@@ -1,69 +1,47 @@
-name: CI – openssl-sys aarch64 cross-build
+name: Reproduce openssl-sys aarch64 failure
 
-on: [push, pull_request, workflow_dispatch]
+on:
+  push:
+    branches: [ "**" ]
+  pull_request:
+  workflow_dispatch:
 
 jobs:
-  build-openssl-sys-aarch64:
-    runs-on: ubuntu-latest     # Noble (24.04)
-
-    env:
-      RUST_BACKTRACE: 1
-      CARGO_TERM_VERBOSE: true
-      PKG_CONFIG_ALLOW_CROSS: "1"
-      OPENSSL_DIR:         /usr/lib/aarch64-linux-gnu
-      OPENSSL_LIB_DIR:     /usr/lib/aarch64-linux-gnu
-      OPENSSL_INCLUDE_DIR: /usr/include/aarch64-linux-gnu
+  repro-openssl-sys-aarch64:
+    runs-on: ubuntu-latest         # no self-hosted runner
 
     steps:
-    # ── 1 ── Replace sources.list with clean amd64 + arm64 entries ─────────
-      - name: Re-write APT sources for amd64 & arm64
+      - name: Install deps
+        run: sudo apt -y install protobuf-compiler lld
+
+      - name: aarch64 setup
+        shell: bash
         run: |
-          CODENAME=$(lsb_release -sc)                # noble
-          sudo rm -f /etc/apt/sources.list.d/*.list  # drop extra mirrors
-          sudo tee /etc/apt/sources.list > /dev/null <<EOF
-          # --- default architecture (amd64) ----------
-          deb [arch=amd64] http://archive.ubuntu.com/ubuntu $CODENAME          main restricted universe multiverse
-          deb [arch=amd64] http://archive.ubuntu.com/ubuntu $CODENAME-updates  main restricted universe multiverse
-          deb [arch=amd64] http://security.ubuntu.com/ubuntu $CODENAME-security main restricted universe multiverse
+          sudo apt update
+          sudo apt install -y gcc-multilib g++-multilib
+          sudo apt install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
 
-          # --- foreign architecture (arm64) via ports ---
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports $CODENAME          main restricted universe multiverse
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports $CODENAME-updates  main restricted universe multiverse
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports $CODENAME-security main restricted universe multiverse
-          EOF
+          mkdir -p .cargo
+          touch .cargo/config
+          printf '[target.aarch64-unknown-linux-gnu]\nlinker = "aarch64-linux-gnu-gcc"' >> .cargo/config
 
-          sudo dpkg --add-architecture arm64
-          sudo apt-get update
-
-    # ── 2 ── Install cross tool-chain & OpenSSL dev files (arm64) ──────────
-      - name: Install cross compiler and OpenSSL:arm64
-        run: |
-          sudo apt-get install -y \
-            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
-            libc6-dev:arm64 zlib1g-dev:arm64 libssl-dev:arm64 \
-            pkg-config
-
-    # ── 3 ── Provide aarch64-aware pkg-config wrapper ──────────────────────
-      - name: Add aarch64 pkg-config wrapper
-        run: |
-          echo -e '#!/usr/bin/env bash\nPKG_CONFIG_SYSROOT_DIR=/usr/aarch64-linux-gnu exec pkg-config "$@"' \
-            | sudo tee /usr/local/bin/aarch64-linux-gnu-pkg-config
-          sudo chmod +x /usr/local/bin/aarch64-linux-gnu-pkg-config
-
-    # ── 4 ── Configure Cargo for cross compilation ─────────────────────────
-      - name: Configure Cargo target
+      - name: x86_64 setup
         run: |
           mkdir -p .cargo
-          cat > .cargo/config <<'EOF'
-          [target.aarch64-unknown-linux-gnu]
-          linker     = "aarch64-linux-gnu-gcc"
-          pkg-config = "aarch64-linux-gnu-pkg-config"
-          EOF
+          touch .cargo/config
+          printf '[target.x86_64-unknown-linux-gnu]\nrustflags = ["-Clink-arg=-fuse-ld=lld"]' >> .cargo/config
 
-      - name: Add Rust aarch64 target
-        run: rustup target add aarch64-unknown-linux-gnu
+      - name: Install & display rust toolchain
+        run: rustup show
 
-    # ── 5 ── Minimal crate that depends only on openssl-sys ────────────────
+      - name: Add aarch64 target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Check targets are installed correctly
+        run: rustup target list --installed
+
+
+      # 3) minimal crate that depends only on openssl-sys
       - name: Create demo project
         run: |
           mkdir demo && cd demo
@@ -78,7 +56,7 @@ jobs:
           TOML
           mkdir src && echo "fn main() {}" > src/main.rs
 
-    # ── 6 ── Build openssl-sys for aarch64 ─────────────────────────────────
-      - name: Build openssl-sys for aarch64
+      # 4) attempt to build openssl-sys for aarch64
+      - name: Build (expected to fail)
         working-directory: demo
         run: cargo build --target aarch64-unknown-linux-gnu -p openssl-sys --verbose
