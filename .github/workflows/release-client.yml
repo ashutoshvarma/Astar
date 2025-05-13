@@ -1,42 +1,61 @@
-name: Reproduce openssl-sys aarch64 failure
+name: Fix openssl-sys aarch64 build
 
-on:
-  push:
-    branches: [ "**" ]
-  pull_request:
-  workflow_dispatch:
+on: [push, pull_request, workflow_dispatch]
 
 jobs:
-  repro-openssl-sys-aarch64:
-    runs-on: ubuntu-latest         # no self-hosted runner
+  openssl-sys-aarch64:
+    runs-on: ubuntu-latest          # Noble runner
+
+    env:
+      PKG_CONFIG_ALLOW_CROSS: "1"
+      OPENSSL_DIR:         /usr/lib/aarch64-linux-gnu
+      OPENSSL_LIB_DIR:     /usr/lib/aarch64-linux-gnu
+      OPENSSL_INCLUDE_DIR: /usr/include/aarch64-linux-gnu
+      RUST_BACKTRACE: 1
+      CARGO_TERM_VERBOSE: true
 
     steps:
-      - name: Install deps
-        run: sudo apt -y install protobuf-compiler lld
-
-      - name: aarch64 setup
-        shell: bash
+    # 1 ─────────── Enable arm64 repos on ports.ubuntu.com ──────────
+      - name: Enable arm64 architecture + mirror
         run: |
-          sudo apt update
-          sudo apt install -y gcc-multilib g++-multilib
-          sudo apt install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+          sudo dpkg --add-architecture arm64
+          CODENAME=$(lsb_release -sc)   # noble
+          sudo tee /etc/apt/sources.list.d/ubuntu-ports-arm64.list <<EOF
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports $CODENAME          main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports $CODENAME-updates  main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports $CODENAME-security main restricted universe multiverse
+          EOF
+          sudo apt-get update
 
+    # 2 ─────────── Install toolchain + arm64 OpenSSL ───────────────
+      - name: Install cross compiler & libssl-dev:arm64
+        run: |
+          sudo apt-get install -y \
+            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+            libc6-dev:arm64 zlib1g-dev:arm64 libssl-dev:arm64 \
+            pkg-config
+
+    # 3 ─────────── Provide pkg-config wrapper ──────────────────────
+      - name: Add aarch64 pkg-config wrapper
+        run: |
+          echo '#!/usr/bin/env bash
+          PKG_CONFIG_SYSROOT_DIR=/usr/aarch64-linux-gnu exec pkg-config "$@"' \
+          | sudo tee /usr/local/bin/aarch64-linux-gnu-pkg-config
+          sudo chmod +x /usr/local/bin/aarch64-linux-gnu-pkg-config
+
+    # 4 ─────────── Cargo cross config ──────────────────────────────
+      - name: Configure Cargo target
+        run: |
           mkdir -p .cargo
-          touch .cargo/config
-          printf '[target.aarch64-unknown-linux-gnu]\nlinker = "aarch64-linux-gnu-gcc"' >> .cargo/config
+          cat > .cargo/config <<'EOF'
+          [target.aarch64-unknown-linux-gnu]
+          linker     = "aarch64-linux-gnu-gcc"
+          pkg-config = "aarch64-linux-gnu-pkg-config"
+          EOF
+          rustup target add aarch64-unknown-linux-gnu
 
-      - name: Install & display rust toolchain
-        run: rustup show
-
-      - name: Add aarch64 target
-        run: rustup target add aarch64-unknown-linux-gnu
-
-      - name: Check targets are installed correctly
-        run: rustup target list --installed
-
-
-      # 3) minimal crate that depends only on openssl-sys
-      - name: Create demo project
+    # 5 ─────────── Minimal crate building only openssl-sys ─────────
+      - name: Create demo crate
         run: |
           mkdir demo && cd demo
           cat > Cargo.toml <<'TOML'
@@ -44,13 +63,11 @@ jobs:
           name    = "openssl-sys-demo"
           version = "0.1.0"
           edition = "2021"
-
           [dependencies]
           openssl-sys = "0.9.108"
           TOML
           mkdir src && echo "fn main() {}" > src/main.rs
 
-      # 4) attempt to build openssl-sys for aarch64
-      - name: Build (expected to fail)
+      - name: Build openssl-sys for aarch64
         working-directory: demo
         run: cargo build --target aarch64-unknown-linux-gnu -p openssl-sys --verbose
