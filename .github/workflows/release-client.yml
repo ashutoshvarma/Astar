@@ -35,7 +35,7 @@ jobs:
         run: rustup show
 
       - name: Add aarch64 target
-        run: rustup target add ${{ matrix.target }}
+        run: rustup target add aarch64-unknown-linux-gnu
 
       - name: Check targets are installed correctly
         run: rustup target list --installed
